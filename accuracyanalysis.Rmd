@@ -1,0 +1,442 @@
+---
+title: "Accuracy Analysis"
+author: "Owen Travis"
+date: "Princeton University Senior Thesis, Class of 2024"
+output:
+  html_document:
+    df_print: paged
+    toc: no
+    toc_depth: 3
+  pdf_document:
+    fig_caption: yes
+    number_sections: no
+    toc: no
+    toc_depth: 3
+geometry: margin=1.5in
+editor_options:
+  chunk_output_type: console
+---
+
+This file contains code used for processing the output of `analysis.py`.
+This provides a deeper understanding of human play styles by leveraging KataGo
+move selections.
+
+### Setup
+```{r, message=FALSE}
+# ------------------------------------------------------------------------------
+# Import necessary libraries
+# ------------------------------------------------------------------------------
+library(readr)
+library(ggplot2)
+library(magrittr)
+library(dplyr)
+library(stringr)
+library(tidyr)
+library(forcats)
+```
+
+```{r}
+# ------------------------------------------------------------------------------
+# One time only, run this code to combine the csv files produced by the cluster.
+# Also, add a few columns for ease of analysis.
+# ------------------------------------------------------------------------------
+# library(plyr)
+# setwd("/path/to/slurm/output/csv/folder")
+# df <- ldply(list.files(), read.csv, header=TRUE, .progress="text")
+# df <- df %>% mutate(sum_best_dx_dy = best_dx + best_dy)
+# df <- df %>% mutate(playedOptimally = gtp_vertex==bestMove)
+# df <- df %>% mutate(euclidean_best_dx_dy = sqrt(best_dx^2 + best_dy^2))
+# write.csv(df, "/path/to/file/for/acc_csv_combined.csv")
+```
+
+```{r}
+# ------------------------------------------------------------------------------
+# Load the data set.
+# ------------------------------------------------------------------------------
+df <- readr::read_csv("/path/to/file/for/acc_csv_combined.csv")
+```
+
+```{r}
+# ------------------------------------------------------------------------------
+# Function that takes a vertex and returns its mirror image vertex
+# ------------------------------------------------------------------------------
+mirror <- function(gtp_vertex) {
+  alphabet <- "ABCDEFGHJKLMNOPQRST"
+  x <- substr(gtp_vertex, 1, 1)
+  y <- substr(gtp_vertex, 2, nchar(gtp_vertex)+1)
+  index_x <- unlist(gregexpr(x, alphabet))
+  mirror_x <- substr(alphabet, 20-index_x, 20-index_x)
+  mirror_y <- 20 - strtoi(y)
+  return(paste(mirror_x, mirror_y, sep=""))
+}
+```
+
+```{r}
+# ------------------------------------------------------------------------------
+# Update column types and add other new columns.
+# ------------------------------------------------------------------------------
+df <- df %>% mutate(euclidean_played_dx_dy = sqrt(played_dx^2 + played_dy^2))
+df <- df %>% mutate(sum_played_dx_dy = played_dx + played_dy)
+df <- df %>% mutate(playedCloser = sum_played_dx_dy < sum_best_dx_dy)
+df <- df %>% mutate(playedSameDistance = sum_played_dx_dy == sum_best_dx_dy)
+df <- df %>% mutate(playedFarther = sum_played_dx_dy > sum_best_dx_dy)
+# Add column containing the number of moves in each game
+df <- df %>%
+  group_by(gameFile) %>% 
+  mutate(numMovesInGame = max(num)) %>% 
+  ungroup()
+# Add column with the mirror image of each vertex
+df <- df %>%
+  rowwise() %>%
+  mutate(mirror_gtp_vertex = mirror(gtp_vertex)) %>% 
+  ungroup()
+# Add column flagging moves where the previous move was a mirror image
+df <- mutate(df, mirror_flag = gtp_vertex == lag(mirror_gtp_vertex, 1, default = NA))
+# Add column with number of mirrored moves in the game
+df <- df %>%
+  group_by(gameFile) %>% 
+  mutate(pctMirrorMovesInGame = sum(mirror_flag)/numMovesInGame) %>% 
+  ungroup()
+# Add column combining color and vertex
+df <- mutate(df, colorvertex = paste(color, gtp_vertex))
+# Add column flagging moves where the same exact move (color, vertex) was
+# already played earlier in the game
+df <- df %>%
+  group_by(gameFile) %>%
+  mutate(duplicate_flag = duplicated(colorvertex)) %>% 
+  ungroup()
+# Order the player ranks by rank
+df <- df %>% mutate(orderedRank = fct_relevel(playerRank, "30k", "29k", "28k",
+                "27k", "26k", "25k", "24k", "23k", "22k", "21k", "20k", "19k", "18k",
+                '17k', '16k', '15k', '14k', "13k", "12k", '11k', "10k", "9k", "8k", "7k",
+                "6k",'5k', '4k', '3k', "2k", '1k', "1d", "2d", "3d", "4d", "5d", "6d", "7d",
+                "8d", "9d"))
+
+df$sum_best_dx_dy <- as.factor(df$sum_best_dx_dy)
+```
+
+```{r}
+# ------------------------------------------------------------------------------
+# Flag additional robots
+# ------------------------------------------------------------------------------
+df[str_detect(tolower(df$playerName), 'alphago'), "isBot"] <- TRUE
+df[str_detect(tolower(df$playerName), 'leelazero'), "isBot"] <- TRUE
+```
+
+```{r}
+# ------------------------------------------------------------------------------
+# Determine proportions of moves played closer/equidistant/farther from
+# the optimal move based on city block distance.
+# ------------------------------------------------------------------------------
+df %>% filter(isBot == FALSE) %>%
+  pull(playedCloser) %>%
+  mean(na.rm = T)
+df %>% filter(isBot == FALSE) %>% 
+  pull(playedSameDistance) %>% 
+  mean(na.rm = T)
+df %>% filter(isBot == FALSE) %>% 
+  pull(playedFarther) %>% 
+  mean(na.rm = T)
+```
+
+```{r}
+# ------------------------------------------------------------------------------
+# Figure: Density plot of city block (sum) distance of KataGo's optimal moves
+# ------------------------------------------------------------------------------
+df %>% 
+  ggplot() + 
+  geom_density(aes(x=euclidean_best_dx_dy), na.rm=T, bw=1, fill="#00BFC4") +
+  labs(x="Euclidean distance from the previous move",
+       y="Density",
+       fill="") +
+  theme(axis.title=element_text(size=20),
+      axis.text.x=element_text(size=20),
+      axis.text.y=element_text(size=20),
+      legend.text=element_text(size=20))
+```
+
+### Robot detection (prolific players and optimal players)
+```{r}
+# ------------------------------------------------------------------------------
+# Print lists of the top players
+# ------------------------------------------------------------------------------
+# List of prolific players and their rate of optimal play
+df %>% 
+  group_by(playerName) %>% 
+  summarize(count=n(),
+            optimality=mean(playedOptimally)) %>% 
+  arrange(desc(count)) %>% 
+  print(n=50)
+
+# List of optimal players and their move count
+df %>% 
+  group_by(playerName) %>% 
+  summarize(optimality=mean(playedOptimally),
+            count=n()) %>% 
+  arrange(desc(optimality)) %>% 
+  print(n=50)
+```
+
+### Number of observations by distance from the previous move to the best move
+```{r}
+# ------------------------------------------------------------------------------
+# Number of observations by distance from the previous move to the best move
+# ------------------------------------------------------------------------------
+# This basically shows the same thing as the density plots
+# Figure:
+df %>%
+  filter(analyzed == TRUE & !is.na(sum_best_dx_dy)) %>% 
+  group_by(sum_best_dx_dy) %>% 
+  summarize(count=n()) %>% 
+  ggplot(aes(x=sum_best_dx_dy, y=count)) +
+  geom_point() +
+  labs(x="Distance from the previous move to the best move",
+       y="Number of observations")
+# as a dataframe
+df %>%
+  filter(analyzed == TRUE & !is.na(sum_best_dx_dy)) %>% 
+  group_by(sum_best_dx_dy) %>% 
+  summarize(count=n()) %>% 
+  print(n=36)
+```
+
+### Optimal play rate
+```{r}
+# ------------------------------------------------------------------------------
+# Figure: Optimal play rate vs. distance from the previous move to the best move
+# ------------------------------------------------------------------------------
+# Rate of optimal play vs. Distance from the previous move to the best move
+# (first four moves filtered out)
+df_unfiltered %>% 
+  group_by(sum_best_dx_dy) %>% 
+  summarize(optimality = mean(playedOptimally),
+            err_optimality = (qnorm(0.975)*sd(playedOptimally))/sqrt(n())) %>% 
+  ggplot(aes(x=sum_best_dx_dy, y=optimality)) +
+  geom_point(size=4) +
+  geom_errorbar(aes(x=sum_best_dx_dy, ymin=optimality-err_optimality,
+                    ymax=optimality+err_optimality), width=0.5, size=1) +
+  labs(x="Manhattan distance from the best move to the previous move",
+       y="Rate of optimal human play") +
+  scale_x_discrete(breaks=c("","","","",5,"","","","",10,"","","","",15,"","","","",
+                            20,"","","","",25,"","","","",30,"","","","",35,"")) +
+  theme(axis.title=element_text(size=20),
+      axis.text.x=element_text(size=20),
+      axis.text.y=element_text(size=20),
+      legend.text=element_text(size=20))
+```
+
+```{r}
+# ------------------------------------------------------------------------------
+# Report the rate of optimal play rate for distance=1 and distance=15
+# ------------------------------------------------------------------------------
+df %>%
+  filter(num > 4) %>% 
+  filter(analyzed == TRUE & !is.na(sum_best_dx_dy)) %>% 
+  group_by(sum_best_dx_dy) %>% 
+  summarize(optimality = mean(playedOptimally),
+            count = n()) %>% 
+  filter(sum_best_dx_dy == 1 | sum_best_dx_dy == 15)
+```
+
+```{r}
+# ------------------------------------------------------------------------------
+# Figure: Optimal play rate with filtering of mirror games and ko
+# ------------------------------------------------------------------------------
+# Rate of optimal play vs. Distance from the previous move to the best move
+# (first four moves filtered out)
+df_unfiltered <- df %>%
+  filter(num > 4) %>%
+  filter(analyzed == TRUE & !is.na(sum_best_dx_dy)) %>% 
+  select(sum_best_dx_dy, playedOptimally) %>% 
+  mutate(filtered=FALSE)
+
+df_filtered <- df %>%
+  filter(num > 4 &
+           !duplicate_flag &
+           !(mirror_flag & pctMirrorMovesInGame > .2)) %>%
+  filter(analyzed == TRUE & !is.na(sum_best_dx_dy)) %>% 
+  select(sum_best_dx_dy, playedOptimally) %>% 
+  mutate(filtered=TRUE)
+
+df_unfiltered %>% nrow()
+df_filtered %>% nrow()
+
+rbind(df_unfiltered, df_filtered) %>% 
+  group_by(sum_best_dx_dy, filtered) %>% 
+  summarize(optimality = mean(playedOptimally),
+            err_optimality = (qnorm(0.975)*sd(playedOptimally))/sqrt(n())) %>% 
+  ggplot() +
+  geom_errorbar(aes(x=sum_best_dx_dy, ymin=optimality-err_optimality,
+                    ymax=optimality+err_optimality, color=filtered), width=0.5, size=1) +
+  geom_point(aes(x=sum_best_dx_dy, y=optimality, color=filtered), size=4) +
+  labs(x="Manhattan distance from the best move to the previous move",
+       y="Rate of optimal human play",
+       color="") +
+  scale_x_discrete(breaks=c("","","","",5,"","","","",10,"","","","",15,"","","","",
+                            20,"","","","",25,"","","","",30,"","","","",35,"")) +
+  theme(axis.title=element_text(size=20),
+      axis.text.x=element_text(size=20),
+      axis.text.y=element_text(size=20),
+      legend.text=element_text(size=20)) +
+  scale_color_manual(labels=c("No filtering\n(n=15,351,109)\n", "With ko and\nmirror filtering\n(n=14,993,252)"),
+                     values=c("black", "#00BFC4"))
+```
+
+```{r}
+# ------------------------------------------------------------------------------
+# Figure: Optimal play rate with filtering of mirror games, ko, and player rank
+# ------------------------------------------------------------------------------
+df_filtered_low <- df %>%
+  filter(num > 4 &
+           !duplicate_flag &
+           !(mirror_flag & pctMirrorMovesInGame > .2) &
+           orderedRank == "1k" &
+           sum_best_dx_dy != 35)%>%
+  filter(analyzed == TRUE & !is.na(sum_best_dx_dy)) %>% 
+  select(sum_best_dx_dy, playedOptimally) %>% 
+  mutate(low_rank=TRUE)
+
+
+df_filtered_high <- df %>% 
+  filter(num > 4 &
+           !duplicate_flag &
+           !(mirror_flag & pctMirrorMovesInGame > .2) &
+           orderedRank == '9d' &
+           sum_best_dx_dy != 35) %>%
+  filter(analyzed == TRUE & !is.na(sum_best_dx_dy)) %>% 
+  select(sum_best_dx_dy, playedOptimally) %>% 
+  mutate(low_rank=FALSE)
+
+
+rbind(df_filtered_low, df_filtered_high) %>% 
+  group_by(sum_best_dx_dy, low_rank) %>% 
+  summarize(optimality = mean(playedOptimally),
+            err_optimality = (qnorm(0.975)*sd(playedOptimally))/sqrt(n())) %>% 
+  ggplot() +
+  geom_errorbar(aes(x=sum_best_dx_dy, ymin=optimality-err_optimality,
+                    ymax=optimality+err_optimality, color=low_rank), width=0.5, size=1) +
+  geom_point(aes(x=sum_best_dx_dy, y=optimality, color=low_rank), size=4) +
+  labs(x="Manhattan distance from the best move to the previous move",
+       y="Rate of optimal human play",
+       color="") +
+  scale_x_discrete(breaks=c("","","","",5,"","","","",10,"","","","",15,"","","","",
+                            20,"","","","",25,"","","","",30,"","","","",35,"")) +
+  theme(axis.title=element_text(size=20),
+      axis.text.x=element_text(size=20),
+      axis.text.y=element_text(size=20),
+      legend.text=element_text(size=20)) +
+  scale_color_manual(labels=c("9d players\n(n=1,106,307)\n", "1k players\n(n=378,031)"),
+                     values=c("blue", "#00BFC4"))
+```
+
+
+```{r}
+# ------------------------------------------------------------------------------
+# Exploring optimal play rate with no filtering for 1d and 9d players
+# ------------------------------------------------------------------------------
+df %>%
+  filter(playerRank == "9d" | playerRank == "1d") %>% 
+  filter(analyzed == TRUE & !is.na(sum_best_dx_dy)) %>% 
+  group_by(sum_best_dx_dy, playerRank) %>% 
+  summarize(optimality = mean(playedOptimally),
+            err_optimality = (qnorm(0.975)*sd(playedOptimally))/sqrt(n())) %>% 
+  ggplot(aes(x=sum_best_dx_dy, y=optimality, color=playerRank)) +
+  geom_point(size=4) +
+  geom_errorbar(aes(x=sum_best_dx_dy, ymin=optimality-err_optimality,
+                    ymax=optimality+err_optimality, color=playerRank), width=0.5) +
+  labs(x="Distance from the previous move to the best move",
+       y="Rate of optimal play",
+       color="Player Rank")
+```
+
+```{r}
+# ------------------------------------------------------------------------------
+# Perform data validity checks.
+# ------------------------------------------------------------------------------
+# `sum_best_dx_dy` should never be 0, as this would indicate that the best move
+# is the previous move.
+(df %>% filter(sum_best_dx_dy == 0) %>% nrow()) == 0
+
+# Compare KataGo mean to AlphaGo mean
+# KataGo plays even further than AlphaGo from the previous move
+df %>% 
+  pull(euclidean_best_dx_dy) %>% 
+  mean(na.rm=T)
+```
+
+
+```{r}
+# ------------------------------------------------------------------------------
+# Figure: Rate of optimal play vs. player rank
+# ------------------------------------------------------------------------------
+data_fig_optimality_by_rank <- df %>% 
+  filter(analyzed == TRUE & !is.na(orderedRank)) %>% 
+  filter(orderedRank %in% c("6k",'5k', '4k', '3k', "2k", '1k', "1d", "2d", "3d", "4d", 
+                            "5d", "6d", "7d", "8d", "9d")) %>% 
+  group_by(orderedRank) %>% 
+  summarize(optimality = mean(playedOptimally),
+            err_optimality = (qnorm(0.975)*sd(playedOptimally))/sqrt(n()))
+
+data_fig_optimality_by_rank %>% 
+  ggplot(aes(x=orderedRank, y=optimality)) +
+  geom_point(size=4) +
+  geom_errorbar(aes(x=orderedRank, ymin=optimality-err_optimality,
+                    ymax=optimality+err_optimality), width=0.3) +
+  labs(x=expression("Increasing player rank" %->% ""),
+       y="Rate of optimal play") +
+  theme(axis.title=element_text(size=20),
+        axis.text.y=element_text(size=20),
+        axis.text.x=element_text(size=20))
+```
+
+```{r}
+# ------------------------------------------------------------------------------
+# Correlation statistics (rate of optimal play vs. player rank)
+# ------------------------------------------------------------------------------
+cor.test(c(-6, -5, -4, -3, -2, -1, 1, 2, 3, 4, 5, 6, 7, 8, 9),
+         data_fig_optimality_by_rank$optimality, method=c("pearson"))
+```
+
+```{r}
+# ------------------------------------------------------------------------------
+# Figure: Mistake type by distance from the previous move to the optimal move
+# ------------------------------------------------------------------------------
+data_fig_mistaketype <- df %>%
+  filter(analyzed &
+           !playedOptimally &
+           !is.na(sum_best_dx_dy)) %>%
+  filter(num > 4 &
+         !duplicate_flag &
+         !(mirror_flag & pctMirrorMovesInGame > .2)) %>% 
+  group_by(sum_best_dx_dy) %>% summarize(pctCloser = mean(playedCloser,
+                                                          na.rm=T),
+                                         pctSameDistance = mean(playedSameDistance, 
+                                                                na.rm=T),
+                                         pctFarther = mean(playedFarther,
+                                                           na.rm=T)) %>% 
+  pivot_longer(cols=c("pctFarther", "pctSameDistance", "pctCloser"),
+               names_to = "mistakeType",
+               values_to = "pct") %>% 
+  mutate(mistakeType = fct_relevel(mistakeType, "pctFarther", "pctSameDistance", "pctCloser"))
+
+data_fig_mistaketype %>% 
+  ggplot(aes(x=sum_best_dx_dy, y=pct, fill=mistakeType)) +
+  geom_bar(position="stack", stat="identity") +
+  theme(panel.background = element_blank()) +
+  scale_y_continuous(expand = c(0, 0), limits=c(0, 1.02)) +
+  scale_x_discrete(breaks=c("","","","",5,"","","","",10,"","","","",15,"","","","",
+                            20,"","","","",25,"","","","",30,"","","","",35,"")) +
+  scale_fill_discrete(labels = c("Too far", "Correct distance", "Too close")) +
+  theme(axis.title=element_text(size=20),
+        axis.text.y=element_text(size=20),
+        axis.text.x=element_text(size=20),
+        legend.text=element_text(size=15),
+        legend.title = element_text(size=15)) +
+  labs(x="Manhattan distance from the previous move to the optimal move",
+       y="Distribution of mistakes",
+       fill = "Mistake type")
+```
+
+
+
+

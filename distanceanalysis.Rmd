@@ -1,0 +1,461 @@
+---
+title: "Distance Analysis"
+author: "Owen Travis"
+date: "Princeton University Senior Thesis, Class of 2024"
+output:
+  html_document:
+    df_print: paged
+    toc: no
+    toc_depth: 3
+  pdf_document:
+    fig_caption: yes
+    number_sections: no
+    toc: no
+    toc_depth: 3
+geometry: margin=1.5in
+---
+
+This file contains code used for processing the output of `distance.py`.
+This provides an initial understanding of the distance between each move and
+the corresponding previous move, without any AI analysis of positions.
+
+### Setup
+```{r, message=FALSE}
+# ------------------------------------------------------------------------------
+# Import necessary libraries
+# ------------------------------------------------------------------------------
+library(readr)
+library(ggplot2)
+library(magrittr)
+library(dplyr)
+library(forcats)
+library(fBasics)
+library(scales)
+library(stringr)
+library(gridExtra)
+```
+
+```{r, message=FALSE}
+# ------------------------------------------------------------------------------
+# Load the data set
+# ------------------------------------------------------------------------------
+df = read_csv("/path/to/distance.py/output.csv")
+```
+
+```{r}
+# ------------------------------------------------------------------------------
+# Update column types and add distance columns
+# ------------------------------------------------------------------------------
+# Make isAlphaGo a factor
+df$isAlphaGo <- as.factor(df$isAlphaGo)
+# Set the AlphaGo player rank to 'AG'
+df[df$isAlphaGo==1, "playerRank"] <- 'AG'
+# Make player rank a factor
+df$Rank <- as.factor(df$playerRank)
+# Create a custom ordering of player rank
+df <- df %>% mutate(orderedRank = fct_relevel(playerRank, "30k", "29k", "28k",
+                "27k", "26k", "25k", "24k", "23k", "22k", "21k", "20k", "19k", "18k",
+                '17k', '16k', '15k', '14k', "13k", "12k", '11k', "10k", "9k", "8k", "7k",
+                "6k",'5k', '4k', '3k', "2k", '1k', "1d", "2d", "3d", "4d", "5d", "6d", "7d",
+                "8d", "9d", "AG"))
+# Calculate city block (sum) distance and Euclidean distance from the previous move
+df <- df %>% mutate(sum_played_dx_dy = played_dx + played_dy)
+df <- df %>% mutate(euclidean_played_dx_dy = sqrt(played_dx^2 + played_dy^2))
+```
+
+```{r}
+# ------------------------------------------------------------------------------
+# Flag additional robots
+# ------------------------------------------------------------------------------
+df[str_detect(tolower(df$playerName), 'alphago'), "isBot"] <- TRUE
+df[str_detect(tolower(df$playerName), 'leelazero'), "isBot"] <- TRUE
+```
+
+### Game and move counts
+```{r}
+# ------------------------------------------------------------------------------
+# Report counts
+# ------------------------------------------------------------------------------
+ #AlphaGo game count
+df %>% filter(isAlphaGo == 1) %>% select(gameFile) %>% unique() %>% nrow()
+#AlphaGo move count
+df %>% filter(isAlphaGo == 1) %>% nrow()
+#KGS game count
+df %>% filter(isAlphaGo == 0) %>% select(gameFile) %>% unique() %>% nrow()
+#KGS move count
+df %>% filter(isAlphaGo == 0) %>% nrow()
+#KGS human move count
+df %>% filter(isAlphaGo == 0 & isBot == FALSE) %>% nrow()
+#KGS robot move count
+df %>% filter(isAlphaGo == 0 & isBot == TRUE) %>% nrow()
+```
+
+### Move distribution by player rank
+```{r}
+# ------------------------------------------------------------------------------
+# Figure: Distribution of human moves by player rank
+# ------------------------------------------------------------------------------
+df %>% filter(isAlphaGo == 0 & isBot == FALSE) %>% 
+  filter(orderedRank %in% c("6k",'5k', '4k', '3k', "2k", '1k', "1d", "2d", "3d", "4d", "5d",
+                            "6d", "7d", "8d", "9d")) %>% 
+  ggplot(aes(x=orderedRank)) +
+  geom_bar() +
+  labs(x=expression("Increasing player rank" %->% ""),
+       y="Number of moves observed") +
+  scale_y_continuous(labels = scales::label_number_si()) +
+  theme(axis.title=element_text(size=20),
+    axis.text.x=element_text(size=20),
+    axis.text.y=element_text(size=20),
+    legend.text=element_text(size=20))
+```
+
+### Density plots of move distances
+```{r}
+# ------------------------------------------------------------------------------
+# Figure: Density plot of city block (sum) distance for AlphaGo and humans
+# ------------------------------------------------------------------------------
+df %>%
+  filter(isAlphaGo == 1 | isBot == FALSE) %>% #select only AlphaGo and human moves
+  ggplot() +
+  geom_density(aes(x=sum_played_dx_dy, fill=isAlphaGo), alpha=0.5, na.rm=T, bw=1) +
+  labs(x="City block distance from the previous move", y="Density", fill="") + 
+  scale_fill_discrete(labels=c("Human", "AlphaGo")) +
+  theme(axis.title=element_text(size=20),
+      axis.text.x=element_text(size=20),
+      axis.text.y=element_text(size=20),
+      legend.text=element_text(size=20))
+```
+
+```{r}
+# ------------------------------------------------------------------------------
+# Figure: Density plot using euclidean distance
+# ------------------------------------------------------------------------------
+df %>%
+  filter(isAlphaGo == 1 | isBot == FALSE) %>% 
+  ggplot() +
+  geom_density(aes(x=euclidean_played_dx_dy, fill=isAlphaGo), alpha=0.5, na.rm=T, bw=1) +
+  labs(x="Euclidean distance to the previous move", y="Density", fill="") + 
+  scale_fill_discrete(labels=c("Human", "AlphaGo")) +
+  theme(axis.title=element_text(size=20),
+      axis.text.x=element_text(size=20),
+      axis.text.y=element_text(size=20),
+      legend.text=element_text(size=20))
+
+alphago_quantile <- df %>% filter(isAlphaGo == 1)
+alphago_quantile$sum_played_dx_dy %>% quantile(.50, na.rm=TRUE)
+alphago_quantile %>% filter(sum_played_dx_dy <= 3) %>% nrow()
+alphago_quantile %>% nrow()
+```
+
+### Bar plots of average move distances
+```{r}
+# ------------------------------------------------------------------------------
+# Figure: Bar plot of averages using city block distance
+# ------------------------------------------------------------------------------
+# Pull the list of human city block (sum) move distances
+humanSumDistances <- df %>%
+  filter(isAlphaGo == 0 & isBot == FALSE) %>%
+  pull(sum_played_dx_dy) %>% 
+  na.omit()
+# Calculate the mean, SEM, and 95% confidence interval
+humAvgSumDist <- mean(humanSumDistances)
+humSumSEM <- sd(humanSumDistances) / sqrt(length(humanSumDistances))
+humBoundSumDiff <- qnorm(0.975)*humSumSEM
+
+# Pull the list of KGS robot city block (sum) move distances
+otherBotSumDistances <- df %>% 
+  filter(isAlphaGo == 0 & isBot == TRUE) %>% 
+  pull(sum_played_dx_dy) %>% 
+  na.omit()
+# Calculate the mean, SEM, and 95% confidence interval
+otherBotAvgSumDist <- mean(otherBotSumDistances)
+otherBotSumSEM <- sd(otherBotSumDistances) / sqrt(length(otherBotSumDistances))
+otherBotBoundSumDiff <- qnorm(0.975)*otherBotSumSEM
+
+# Pull the list of AlphaGo city block (sum) move distances
+alphaGoSumDistances <- df %>%
+  filter(isAlphaGo == 1) %>% 
+  pull(sum_played_dx_dy) %>% 
+  na.omit()
+# Calculate the mean, SEM, and 95% confidence interval
+alphaGoAvgSumDist <- mean(alphaGoSumDistances)
+alphaGoSumSEM <- sd(alphaGoSumDistances) / sqrt(length(alphaGoSumDistances))
+alphaGoBoundSumDiff <- qnorm(0.975)*alphaGoSumSEM
+
+# Create a data frame with means and confidence intervals
+data_fig_mean_sum_distance <- data.frame(name=fct_relevel(factor(c("Human", "Robot on KGS", "AlphaGo")),
+                                                          "Human", "Robot on KGS", "AlphaGo"),
+                        value=c(humAvgSumDist, otherBotAvgSumDist, alphaGoAvgSumDist),
+                        ci=c(humBoundSumDiff, otherBotBoundSumDiff, alphaGoBoundSumDiff))
+
+# Make the plot
+fig_mean_sum_distance <- ggplot(data_fig_mean_sum_distance, aes(x=name, y=value, fill=name)) +
+  geom_bar(stat="identity", show.legend=F) + 
+  geom_errorbar(aes(x=name, ymin=value-ci, ymax=value+ci, colour=name), size=1, width=0.4) +
+  labs(fill="", x="", y="Mean Manhattan distance to the previous move") +
+  theme(axis.title=element_text(size=30),
+        axis.text.x=element_text(size=25),
+        axis.text.y=element_text(size=30),
+        legend.position="none") + 
+  scale_fill_manual(values=c("#F8766D", "#00BA38", "#00BFC4")) +
+  scale_color_manual(values=c("#F8766D", "#00BA38", "#00BFC4"))
+```
+
+```{r}
+# ------------------------------------------------------------------------------
+# Figure: Bar plot of averages using euclidean distance
+# ------------------------------------------------------------------------------
+# Pull the list of human Euclidean move distances
+humanEucDistances <- df %>%
+  filter(isAlphaGo == 0 & isBot == FALSE) %>%
+  pull(euclidean_played_dx_dy) %>% 
+  na.omit()
+# Calculate the mean, SEM, and 95% confidence interval
+humAvgEucDist <- mean(humanEucDistances)
+humEucSEM <- sd(humanEucDistances) / sqrt(length(humanEucDistances))
+humBoundEucDiff <- qnorm(0.975)*humEucSEM
+
+# Pull the list of KGS robot Euclidean move distances
+otherBotEucDistances <- df %>% 
+  filter(isAlphaGo == 0 & isBot == TRUE) %>% 
+  pull(euclidean_played_dx_dy) %>% 
+  na.omit()
+# Calculate the mean, SEM, and 95% confidence interval
+otherBotAvgEucDist <- mean(otherBotEucDistances)
+otherBotEucSEM <- sd(otherBotEucDistances) / sqrt(length(otherBotEucDistances))
+otherBotBoundEucDiff <- qnorm(0.975)*otherBotEucSEM
+
+# Pull the list of AlphaGo Euclidean move distances
+alphaGoEucDistances <- df %>%
+  filter(isAlphaGo == 1) %>% 
+  pull(euclidean_played_dx_dy) %>% 
+  na.omit()
+# Calculate the mean, SEM, and 95% confidence interval
+alphaGoAvgEucDist <- mean(alphaGoEucDistances)
+alphaGoEucSEM <- sd(alphaGoEucDistances) / sqrt(length(alphaGoEucDistances))
+alphaGoBoundEucDiff <- qnorm(0.975)*alphaGoEucSEM
+
+# Create a data frame with means and confidence intervals
+data_fig_mean_euc_distance <- data.frame(name=fct_relevel(factor(c("Human", "Robot on KGS", "AlphaGo")),
+                                                     "Human", "Robot on KGS", "AlphaGo"),
+                        value=c(humAvgEucDist, otherBotAvgEucDist, alphaGoAvgEucDist),
+                        ci=c(humBoundEucDiff, otherBotBoundEucDiff, alphaGoBoundEucDiff))
+
+fig_mean_euc_distance <- ggplot(data_fig_mean_euc_distance, aes(x=name, y=value, fill=name)) +
+  geom_bar(stat="identity", show.legend=F) + 
+  geom_errorbar(aes(x=name, ymin=value-ci, ymax=value+ci, colour=name), size=1, width=0.4) +
+  labs(fill="", x="", y="Mean Euclidean distance to the previous move") +
+  theme(axis.title=element_text(size=30),
+        axis.text.x=element_text(size=25),
+        axis.text.y=element_text(size=30),
+        legend.position="none") + 
+  scale_fill_manual(values=c("#F8766D", "#00BA38", "#00BFC4")) +
+  scale_color_manual(values=c("#F8766D", "#00BA38", "#00BFC4"))
+```
+
+```{r}
+# ------------------------------------------------------------------------------
+# Figure: Joint figure showing means in city block and Euclidean distance
+# ------------------------------------------------------------------------------
+grid.arrange(fig_mean_euc_distance, fig_mean_sum_distance, ncol=2)
+```
+
+### Statistics
+```{r}
+# ------------------------------------------------------------------------------
+# Statistics for Euclidean distance
+# ------------------------------------------------------------------------------
+# Counts
+length(humanEucDistances)
+length(otherBotEucDistances)
+length(alphaGoEucDistances)
+
+# Averages
+humAvgEucDist
+otherBotAvgEucDist
+alphaGoAvgEucDist
+
+# Standard deviations
+sd(humanEucDistances)
+sd(otherBotEucDistances)
+sd(alphaGoEucDistances)
+
+# Two sample t-tests
+t.test(x=humanEucDistances, y=alphaGoEucDistances, alternative="two.sided", mu=0)
+t.test(x=humanEucDistances, y=otherBotEucDistances, alternative="two.sided", mu=0)
+t.test(x=otherBotEucDistances, y=alphaGoEucDistances, alternative="two.sided", mu=0)
+
+# Kolmogorov-Smirnov tests
+ks.test(humanEucDistances, alphaGoEucDistances, alternative="two.sided")
+ks.test(humanEucDistances, otherBotEucDistances, alternative="two.sided")
+ks.test(otherBotEucDistances, alphaGoEucDistances, alternative="two.sided")
+```
+
+```{r}
+# ------------------------------------------------------------------------------
+# Statistics for city block (sum) distance
+# ------------------------------------------------------------------------------
+# Counts (evidently the same for Euclidean distance)
+length(humanSumDistances)
+length(otherBotSumDistances)
+length(alphaGoSumDistances)
+
+# Averages
+humAvgSumDist
+otherBotAvgSumDist
+alphaGoAvgSumDist
+
+# Standard deviations
+sd(humanSumDistances)
+sd(otherBotSumDistances)
+sd(alphaGoSumDistances)
+
+# Two sample t-tests
+t.test(x=humanSumDistances, y=alphaGoSumDistances, alternative="two.sided", mu=0)
+t.test(x=humanSumDistances, y=otherBotSumDistances, alternative="two.sided", mu=0)
+t.test(x=otherBotSumDistances, y=alphaGoSumDistances, alternative="two.sided", mu=0)
+
+# Kolmogorov-Smirnov tests
+ks.test(humanSumDistances, alphaGoSumDistances, alternative="two.sided")
+ks.test(humanSumDistances, otherBotSumDistances, alternative="two.sided")
+ks.test(otherBotSumDistances, alphaGoSumDistances, alternative="two.sided")
+```
+
+### Quick visualizations of cumulative distribution functions
+```{r}
+# ------------------------------------------------------------------------------
+# ECDF of human move distances vs. ECDF of AlphaGo move distances.
+# ------------------------------------------------------------------------------
+plot(ecdf(humanSumDistances), 
+     xlim = range(c(humanSumDistances, alphaGoSumDistances)), 
+     col = "blue",
+     main="Human vs. AlphaGo")
+plot(ecdf(alphaGoSumDistances), 
+     add = TRUE, 
+     lty = "dashed",
+     col = "red")
+```
+
+```{r}
+# ------------------------------------------------------------------------------
+# ECDF of human move distances vs. ECDF of KGS robot move distances.
+# ------------------------------------------------------------------------------
+plot(ecdf(humanSumDistances), 
+     xlim = range(c(humanSumDistances, otherBotSumDistances)), 
+     col = "blue",
+     main="Human vs. Other Robots on KGS")
+plot(ecdf(otherBotSumDistances), 
+     add = TRUE, 
+     lty = "dashed",
+     col = "red")
+```
+
+```{r}
+# ------------------------------------------------------------------------------
+# ECDF of KGS robot move distances vs. ECDF of AlphaGo move distances.
+# ------------------------------------------------------------------------------
+plot(ecdf(otherBotSumDistances), 
+     xlim = range(c(otherBotSumDistances, alphaGoSumDistances)), 
+     col = "blue",
+     main="Human vs. Other Robots on KGS")
+plot(ecdf(alphaGoSumDistances), 
+     add = TRUE, 
+     lty = "dashed",
+     col = "red")
+```
+
+### Mean Euclidean move distance by player rank
+```{r}
+# ------------------------------------------------------------------------------
+# Figure: Bar plot of averages by player rank using Euclidean distance
+# ------------------------------------------------------------------------------
+data_fig_mean_euc_distance_by_player_rank <- df %>%
+  # keep only moves by AlphaGo or humans
+  filter(isAlphaGo == 1 | isBot == FALSE) %>% 
+  # keep only the higher ranks
+  filter(orderedRank %in% c("6k", "5k", "4k", "3k", "2k", "1k", "1d", "2d", "3d",
+                            "4d", "5d", "6d", "7d", "8d", "9d", "AG")) %>% 
+  select(orderedRank, euclidean_played_dx_dy) %>% 
+  na.omit() %>% 
+  group_by(orderedRank) %>% 
+  summarize(meanDist = mean(euclidean_played_dx_dy),
+            ci = qnorm(0.975)*(sd(euclidean_played_dx_dy)/sqrt(length(euclidean_played_dx_dy))))
+  
+data_fig_mean_euc_distance_by_player_rank %>% 
+  ggplot(aes(x=orderedRank, y=meanDist,
+             # highlight the AlphaGo group
+             fill=factor(ifelse(orderedRank=="AG","Normal","Highlighted")))) +
+  geom_bar(stat="identity", show.legend=F) +
+  geom_errorbar(aes(x=orderedRank, ymin=meanDist-ci,ymax=meanDist+ci,
+                    # highlight the AlphaGo group
+                    color=factor(ifelse(orderedRank=="AG","Normal","Highlighted"))),
+                size=0.5, width=0.4) +
+  labs(x=expression("Increasing player rank" %->% ""),
+       y="Mean Euclidean distance to the previous move") +
+  theme(axis.title=element_text(size=20),
+        axis.text.x=element_text(size=20),
+        axis.text.y=element_text(size=20),
+        legend.position="none")
+```
+
+### Statistics
+```{r}
+# ------------------------------------------------------------------------------
+# Correlation between average Euclidean distance to the previous move and
+# player rank.
+# ------------------------------------------------------------------------------
+data_cor <- df %>%
+  # keep only moves by AlphaGo or humans
+  filter(isAlphaGo == 0 & isBot == FALSE) %>% 
+  # keep only the higher ranks
+  filter(orderedRank %in% c("6k", "5k", "4k", "3k", "2k", "1k", "1d", "2d", "3d",
+                            "4d", "5d", "6d", "7d", "8d", "9d")) %>% 
+  select(orderedRank, euclidean_played_dx_dy) %>% 
+  na.omit() %>% 
+  group_by(orderedRank) %>% 
+  summarize(meanDist = mean(euclidean_played_dx_dy),
+            ci = qnorm(0.975)*(sd(euclidean_played_dx_dy)/sqrt(length(euclidean_played_dx_dy))))
+
+cor.test(c(-6, -5, -4, -3, -2, -1, 1, 2, 3, 4, 5, 6, 7, 8, 9),
+         data_cor$meanDist, method=c("pearson"))
+
+# ------------------------------------------------------------------------------
+# Statistics for 9d players using Euclidean distance
+# ------------------------------------------------------------------------------
+# Pull the list of 9d human Euclidean move distances
+human9dEucDistances <- df %>%
+  filter(isAlphaGo == 0 & isBot == FALSE & playerRank == "9d") %>%
+  pull(euclidean_played_dx_dy) %>% 
+  na.omit()
+
+# Count, mean, sd
+length(human9dEucDistances)
+mean(human9dEucDistances)
+sd(human9dEucDistances)
+
+# Two sample t-test on 9d distances and AlphaGo distances
+t.test(x=human9dEucDistances, y=alphaGoEucDistances, alternative="two.sided", mu=0)
+# Kolmogorov-Smirnov test on 9d distances and AlphaGo distances
+ks.test(human9dEucDistances, alphaGoEucDistances, alternative="two.sided")
+```
+
+### Exploring the affect of move number on distance from the previous move
+```{r}
+# ------------------------------------------------------------------------------
+# Figure: Mean Euclidean move distance by move number
+#   (grouped by 10-percentiles for move numbers 1-250)
+# ------------------------------------------------------------------------------
+df %>%
+  filter(num < 250 & num > 1) %>% 
+  mutate(bin = ntile(num, n=10)) %>% 
+  group_by(bin, isAlphaGo) %>% 
+  summarize(mean.dist = mean(euclidean_played_dx_dy, na.rm = T)) %>% 
+  ggplot(aes(x=bin, y=mean.dist, fill=isAlphaGo)) +
+  geom_col(position="dodge") + 
+  labs(x="Move number (binned into 10-percentiles)",
+       y="Mean Euclidean distance from the previous move")
+```
+
+
+
+
