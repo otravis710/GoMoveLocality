@@ -9,5 +9,5 @@ Contains the following files:
 Computing. This file is heavily based on materials published by [Princeton
 Research Computing](https://researchcomputing.princeton.edu/support/knowledge-base/slurm) (∼ 20 lines)
 4. `sgfmillplus.py` for modularization through the isolation of helper functions built on top of the Sgfmill Python library. This is an April 2024 version of a library in development [here](https://github.com/otravis710/sgfmillplus) (∼ 150 lines)
-5. `distanceanalysis.rmd` for processing the output of distance.py, aggregating statistics, and generating figures. (∼ 450 lines)
-6. `accuracyanalysis.rmd` for processing the output of accuracy.py, aggregating statistics, and generating figures. (∼ 400 lines)
+5. `distanceanalysis.rmd` for processing the output of `distance.py`, aggregating statistics, and generating figures. (∼ 450 lines)
+6. `accuracyanalysis.rmd` for processing the output of `accuracy.py`, aggregating statistics, and generating figures. (∼ 400 lines)
